@@ -1,13 +1,43 @@
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.Data.Sqlite;
+using System.Data;
 using Dapper;
-using Microsoft.AspNetCore.Mvc;
-using System.Xml;
 using System.ServiceModel.Syndication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
+using System.Xml;
+using System.Text.RegularExpressions;
+using System.Text;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.AspNetCore.CookiePolicy;
 
 var builder = WebApplication.CreateBuilder(args);
+
 builder.Services.AddAntiforgery();
-builder.Services.AddHttpClient();
+builder.Services.AddAuthorization();
+
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+        .AddCookie(options =>
+        {
+            // options.Cookie.Name = "AuthCookie";
+            // options.Cookie.HttpOnly = true;
+            // options.ExpireTimeSpan = TimeSpan.FromMinutes(10);
+            // options.LoginPath = "/sign-in";
+            // options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+            // options.Events = new CookieAuthenticationEvents
+            // {
+            //     OnSigningIn = async context =>
+            //     {
+            //         var antiforgery = context.HttpContext.RequestServices.GetRequiredService<IAntiforgery>();
+            //         var tokens = antiforgery.GetAndStoreTokens(context.HttpContext);
+            //         context.HttpContext.Response.Cookies.Append("XSRF-TOKEN", tokens.RequestToken!);
+            //         await Task.CompletedTask;
+            //     }
+            // };
+        });
+
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 var connection = new SqliteConnection(connectionString);
@@ -17,60 +47,179 @@ app.UseStaticFiles();
 app.UseAntiforgery();
 app.UseHttpsRedirection();
 
-
-connection.Execute(@"CREATE TABLE IF NOT EXISTS Users (
-                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        Email TEXT NOT NULL UNIQUE,
-                        PasswordHash TEXT NOT NULL
-                    );");
-
-// connection.Execute(@"DROP TABLE Feeds");
-
-connection.Execute(@"CREATE TABLE IF NOT EXISTS Feeds (
-                        Id TEXT PRIMARY KEY,
-                        UserId INTEGER NOT NULL,
-                        Url TEXT NOT NULL,
-                        FOREIGN KEY(UserId) REFERENCES Users(Id)
-                    );");
-
-// TODO::home
-
-// TODO:: sign in
-
-// TODO:: sign up
-
-app.MapGet("/", async (HttpContext context, IAntiforgery antiforgery) =>
+app.MapGet("/", (HttpContext context, IAntiforgery antiforgery) =>
 {
-    var tokens = antiforgery.GetAndStoreTokens(context);
-    
-    string htmlContent = await File.ReadAllTextAsync("wwwroot/index.html");
-    htmlContent = htmlContent.Replace("__RequestToken__", tokens.RequestToken);
-    htmlContent = htmlContent.Replace("__FormFieldName__", tokens.FormFieldName);
+    string htmlContent = $"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Feed Reader</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+            <link href="/index.css" rel="stylesheet">
+        </head>
+        <body class="bg-dark">
+            <header>
+                <nav class="navbar navbar-expand-lg navbar-light bg-light fixed-top">
+                    <div class="container-fluid">
+                    <div class="navbar-brand d-inline">Feed Reader</div>
+                    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarScroll" aria-controls="navbarScroll" aria-expanded="false" aria-label="Toggle navigation">
+                        <span class="navbar-toggler-icon"></span>
+                    </button>
+                    <div class="collapse navbar-collapse" id="navbarScroll">
+                        <ul class="navbar-nav me-auto mb-2 mb-lg-0"></ul>
+                        <button hx-get="/render/sign-in" hx-target="main" class="btn btn-outline-dark mx-2" type="submit">Sign In</button>
+                        <button hx-get="/render/sign-up" hx-target="main" class="btn btn-outline-dark" type="submit">Sign Up</button>
+                    </div>
+                    </div>
+                </nav>
+            </header>
+            <main>
+                <div class="d-flex justify-content-center align-items-center vh-100">
+                    <div class="container mt-5 w-75">
+                        <h1 class="text-center text-light fs-1 fw-bold">Welcome to Feed Reader</h1>
+                        <p class="text-center text-light">Your seamless RSS feed reader for staying updated with all your favorite content in one place!</p>
+                    </div>
+                </div>
+            </main>
+            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+            <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
+            <script src="index.js"></script>
+        </body>
+        </html>
+    """;
 
     return Results.Content(htmlContent, "text/html");
 });
 
-app.MapPost("/sign-in", async () => {
-    // Validate user
+app.MapGet("/render/sign-in", (HttpContext context, IAntiforgery antiforgery) =>
+{
+    var tokens = antiforgery.GetAndStoreTokens(context);
     
-    // Redirect to home
+    string htmlContent = $"""
+        <div class="d-flex justify-content-center align-items-center vh-100">
+            <div class="container bg-light p-3 rounded w-50">
+                <form class="px-4 py-3" enctype="multipart/form-data">
+                    <input type="hidden" name="{tokens.FormFieldName}" value="{tokens.RequestToken}">
+                    <div class="mb-3">
+                        <label for="formEmail" class="form-label">Email address</label>
+                        <input type="email" name="email" class="form-control" id="formEmail" placeholder="email@example.com">
+                    </div>
+                    <div class="mb-3">
+                        <label for="formPassword" class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" id="formPassword" placeholder="Password">
+                    </div>
+                    <button hx-post="/sign-in" hx-target="main" type="submit" class="btn btn-primary">Sign In</button>
+                </form>
+                <div class="dropdown-divider"></div>
+                <button hx-get="/render/sign-up" hx-target="main" class="dropdown-item" type="button">New around here? Sign up</button>
+            </div>
+        </div>
+    """;
+
+    return Results.Content(htmlContent, "text/html");
+});
+
+app.MapPost("/sign-in", async (
+                            [FromForm]string email,
+                            [FromForm]string password,
+                            HttpContext context,
+                            IAntiforgery antiforgery) => {
+
+    await antiforgery.ValidateRequestAsync(context);
     
+    using (connection = new SqliteConnection(connectionString)) 
+    {
+        var passwordHash = await connection.QuerySingleOrDefaultAsync<string>("SELECT PasswordHash FROM Users WHERE Email = @Email", new { Email = email });
+        if (passwordHash != null && BCrypt.Net.BCrypt.Verify(password, passwordHash)) {
+            var id = await connection.QuerySingleOrDefaultAsync<int>("SELECT Id FROM Users WHERE Email = @Email", new { Email = email });
+            var claims = new List<Claim>
+            {
+                new(ClaimTypes.Email, email),
+                new("UserId", id!.ToString()!)
+            };
+            var claimsIdentity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+            var authProperties = new AuthenticationProperties() 
+            {
+                IsPersistent = true
+            };
+
+            await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, 
+                                      new ClaimsPrincipal(claimsIdentity), authProperties);
+
+            return Results.Redirect("/home");
+        }
+    }
+
+    // show error message and still be in sign in page
+    return Results.NoContent();
+});
+
+app.MapPost("/sign-out", async (HttpContext context) =>
+{
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Redirect("/");
+});
+
+app.MapGet("/render/sign-up", (HttpContext context, IAntiforgery antiforgery) =>
+{
+    var tokens = antiforgery.GetAndStoreTokens(context);
+    
+    string htmlContent = $"""
+        <div class="d-flex justify-content-center align-items-center vh-100">
+            <div class="container bg-light p-3 rounded w-50">
+                <form class="px-4 py-3" enctype="multipart/form-data">
+                    <input type="hidden" name="{tokens.FormFieldName}" value="{tokens.RequestToken}">
+                    <div class="mb-3">
+                        <label for="formEmail" class="form-label">Email address</label>
+                        <input type="email" name="email" class="form-control" id="formEmail" placeholder="email@example.com">
+                    </div>
+                    <div class="mb-3">
+                        <label for="formPassword" class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" id="formPassword" placeholder="Password">
+                    </div>
+                    <button hx-post="/sign-up" hx-target="main" type="submit" class="btn btn-primary">Sign Up</button>
+                </form>
+                <div class="dropdown-divider"></div>
+                <button hx-get="/render/sign-in" hx-target="main" class="dropdown-item" type="button">Already have an account? Sign In</button>
+            </div>
+        </div>
+    """;
+
+    return Results.Content(htmlContent, "text/html");
+});
+
+app.MapPost("/sign-up", async (
+                            [FromForm]string email,
+                            [FromForm]string password,
+                            HttpContext context,
+                            IAntiforgery antiforgery) => {
+
+    await antiforgery.ValidateRequestAsync(context);
+    
+    using (connection = new SqliteConnection(connectionString))
+    {
+        User? userExists = await connection.QuerySingleOrDefaultAsync<User>("SELECT * FROM Users WHERE Email = @Email", new { Email = email });
+        
+        // user doesn't exist
+        if (userExists == null) {
+            User user = new() { Email = email, PasswordHash = BCrypt.Net.BCrypt.HashPassword(password) };
+            var sqlCommand = "INSERT INTO Users (Email, PasswordHash) VALUES (@Email, @PasswordHash)";
+            int rowsAffected = await connection.ExecuteAsync(sqlCommand, user);
+            return Results.Redirect("/render/sign-in");
+        }
+    }
+
+    // show error message and still be in sign up page
+    return Results.Content("");
 });
 
 app.MapGet("/home", (HttpContext context, IAntiforgery antiforgery) => {
     var tokens = antiforgery.GetAndStoreTokens(context);
     
     string htmlContent = $"""
-        <section class="your-feed">
-            <div class="container">
-                <br>
-                <h1 class="text-light text-center">Your Feed</h1>
-                <div hx-get="/feeds" hx-trigger="load" class="accordion" id="accordion">
-                    <!-- Display what's in db here initially -->
-                </div>
-            </div>
-        </section>
-        <section class="add-remove">
+        <section class="add-remove bg-light pb-2 pe-2 mt-100 rounded w-50 m-auto d-flex justify-content-between">
             <div class="add-button">
                 <button type="button" class="btn btn-light btn-outline-dark mt-2 ms-2" data-bs-toggle="modal" data-bs-target="#addModal">
                     Add Feed
@@ -84,9 +233,9 @@ app.MapGet("/home", (HttpContext context, IAntiforgery antiforgery) => {
                                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                             </div>
                             <div class="modal-body">
-                                <form hx-post="/feed/add" hx-target=".your-feed .container .accordion" hx-swap="beforeend" method="POST" id="addForm" enctype="multipart/form-data">
-                                    <input type="hidden" name="__FormFieldName__" value="__RequestToken__">
-                                    <div class="mb-3">
+                                <form hx-post="/feed/add" hx-target="#addFormInput" hx-swap="beforeend" method="POST" id="addForm" enctype="multipart/form-data">
+                                    <input type="hidden" name="{tokens.FormFieldName}" value="{tokens.RequestToken}">
+                                    <div class="mb-3" id="addFormInput">
                                         <label for="feedUrl" class="form-label">Enter RSS/ATOM Feed URL</label>
                                         <input name="url" type="text" class="form-control" id="feedUrl" required>
                                     </div>
@@ -112,11 +261,12 @@ app.MapGet("/home", (HttpContext context, IAntiforgery antiforgery) => {
                             </div>
                             <div class="modal-body">
                                 <form action="/feed/remove" method="POST" id="removeForm" enctype="multipart/form-data">
-                                    <div class="btn-group">
+                                    <input type="hidden" name="{tokens.FormFieldName}" value="{tokens.RequestToken}">
+                                    <div id="removeFormInput">
                                         <button class="btn btn-danger dropdown-toggle" type="button" id="defaultDropdown" data-bs-toggle="dropdown" data-bs-auto-close="true" aria-expanded="false">
                                           Select a URL to delete
                                         </button>
-                                        <ul hx-get="/feed/urls" hx-trigger="load" class="dropdown-menu" aria-labelledby="defaultDropdown">
+                                        <ul hx-get="/feed/urls" hx-trigger="every 1s" class="dropdown-menu" aria-labelledby="defaultDropdown">
                                             <!-- Display Selections to Remove Here -->
                                         </ul>
                                     </div>
@@ -127,18 +277,36 @@ app.MapGet("/home", (HttpContext context, IAntiforgery antiforgery) => {
                 </div>
             </div>
         </section>
+        <section class="your-feed">
+            <div class="container border border-1 rounded mt-3 py-3">
+                <br>
+                <h1 class="text-light text-center mb-5">Your Feed</h1>
+                <div hx-get="/feeds" hx-trigger="every 2s" class="accordion" id="accordion">
+                    <!-- Display what's in db here initially -->
+                </div>
+            </div>
+        </section>
     """;
-    htmlContent = htmlContent.Replace("__RequestToken__", tokens.RequestToken);
-    htmlContent = htmlContent.Replace("__FormFieldName__", tokens.FormFieldName);
 
     return Results.Content(htmlContent, "text/html");
-});
+}).RequireAuthorization();
 
-app.MapGet("/feeds", async () =>
+app.MapGet("/feeds", async (ClaimsPrincipal user) =>
 {
     connection.Open();
 
-    var feedUrls = await connection.QueryAsync<Feed>("SELECT * FROM Feeds WHERE UserId = 1");
+    var email = user.FindFirst(ClaimTypes.Email);
+    if (email == null)
+    {
+        return Results.Redirect("/");
+    }
+
+    var feedUrls = await connection.QueryAsync<Feed>(
+        "SELECT Feeds.Id, Feeds.UserId, Feeds.Url FROM Feeds INNER JOIN Users ON Feeds.UserId = Users.Id WHERE Users.Email = @Email",
+        new { Email = email.Value }
+    );
+
+    Regex rtlRegex = new(@"[\u0590-\u08FF\u200F\u202A-\u202E\uFB1D-\uFB4F\uFE70-\uFEFF]");
 
     var feedItems = new List<SyndicationItem>();
     string html = "";
@@ -149,8 +317,8 @@ app.MapGet("/feeds", async () =>
         html += $"""
             <div class="accordion-item">
                 <h2 class="accordion-header" id="heading{feed.Id}">
-                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{feed.Id}" aria-expanded="true" aria-controls="collapse{feed.Id}">
-                    Title
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{feed.Id}" aria-expanded="false" aria-controls="collapse{feed.Id}">
+                    {feed.Url}
                 </button>
                 </h2>
                 <div id="collapse{feed.Id}" class="accordion-collapse collapse" aria-labelledby="heading{feed.Id}" data-bs-parent="#accordion">
@@ -159,19 +327,25 @@ app.MapGet("/feeds", async () =>
 
         foreach (var item in Feed.Items)
         {
+            string direction = "";
+            if (rtlRegex.IsMatch(item.Summary.Text))
+            {
+                direction = "rtl"; // Text contains RTL characters
+            }
+            else
+            {
+                direction = "ltr"; // Text does not contain RTL characters
+            }
+
             html += $"""  
-                    <div class="card text-center">
-                    <div class="card-header">
-                        {feed.Url}
-                    </div>
-                    <div class="card-body">
-                        <h5 class="card-title">Special title treatment</h5>
-                        <p class="card-text">{item.Summary.Text}</p>
-                        <a href="{item.Links.FirstOrDefault()?.Uri}" class="btn btn-dark">Continue Reading</a>
-                    </div>
-                    <div class="card-footer text-muted">
-                        {item.LastUpdatedTime:MMM dd, yyyy hh:mm tt}
-                    </div>
+                    <div class="card">
+                        <div class="card-header text-muted">
+                            {item.PublishDate}
+                        </div>
+                        <div class="card-body">
+                            <p class="card-text" dir="{direction}">{item.Summary.Text}</p>
+                            <a href="{item.Links.FirstOrDefault()?.Uri}" class="btn btn-dark">Continue Reading</a>
+                        </div>
                     </div>
                     <br>
                     """;
@@ -184,72 +358,77 @@ app.MapGet("/feeds", async () =>
 });
 
 app.MapPost("/feed/add", async (
-                        [FromForm] string url, 
+                        [FromForm] string url,
+                        ClaimsPrincipal claims,
                         HttpContext context,
                         IAntiforgery antiforgery
                         ) =>
 {
     await antiforgery.ValidateRequestAsync(context);
 
-    Feed feed = new() { 
-        Id = Guid.NewGuid().ToString(),
-        UserId = 1,
-        Url = url
-    };
-
-    connection.Open();
-
-    var sqlCommand = "INSERT INTO Feeds (Id, UserId, Url) VALUES (@Id, @UserId, @Url)";
-    int rowsAffected = await connection.ExecuteAsync(sqlCommand, feed);
-
-    var feedItems = new List<SyndicationItem>();
-    using var reader = XmlReader.Create(url);
-    var Feed = SyndicationFeed.Load(reader);
-    feedItems.AddRange(Feed.Items);
-
-    string html = $"""
-            <div class="accordion-item">
-                <h2 class="accordion-header" id="heading{feed.Id}">
-                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{feed.Id}" aria-expanded="true" aria-controls="collapse{feed.Id}">
-                    Title
-                </button>
-                </h2>
-                <div id="collapse{feed.Id}" class="accordion-collapse collapse" aria-labelledby="heading{feed.Id}" data-bs-parent="#accordion">
-                <div class="accordion-body">
-            """;
-
-    foreach (var item in feedItems)
+    try
     {
-        html += $"""  
-                <div class="card text-center">
-                <div class="card-header">
-                    {feed.Url}
-                </div>
-                <div class="card-body">
-                    <h5 class="card-title">Special title treatment</h5>
-                    <p class="card-text">{item.Summary.Text}</p>
-                    <a href="{item.Links.FirstOrDefault()?.Uri}" class="btn btn-dark">Continue Reading</a>
-                </div>
-                <div class="card-footer text-muted">
-                    2 days ago
-                </div>
-                </div>
-                <br>
-                """;
-    }
+        using XmlReader reader = XmlReader.Create(url);
+        SyndicationFeed sfeed = SyndicationFeed.Load(reader);
 
-    html += "</div></div></div>";
-    
-    return Results.Content(html, "text/html");
+        var userId = claims.FindFirst("UserId");
+        if (userId == null)
+        {
+            return Results.Redirect("/");
+        }
+
+        Feed feed = new()
+        {
+            Id = Guid.NewGuid().ToString(),
+            UserId = Convert.ToInt32(userId.Value),
+            Url = url
+        };
+
+        connection.Open();
+
+        var tmpFeed = await connection.QueryAsync<Feed>(
+            "SELECT f.Id, f.UserId, f.Url FROM Feeds as f INNER JOIN Users as u ON f.UserId = u.Id WHERE u.Id = @Uid AND f.Url = @Url", 
+            new { Uid = feed.UserId, Url = url });
+
+        if (!tmpFeed.Any())
+        {
+            var sqlCommand = "INSERT INTO Feeds (Id, UserId, Url) VALUES (@Id, @UserId, @Url)";
+            int rowsAffected = await connection.ExecuteAsync(sqlCommand, feed);
+
+            connection.Close();
+
+            return Results.Content($"""
+                <div class="alert alert-success mt-2" id="successAlert" role="alert">Feed Added Successfully!</div>
+                """, "text/html");
+        }
+        else
+        {
+            return Results.Content($"""
+                <div class="alert alert-warning mt-2" id="warningAlert" role="alert">Feed already exists!</div>
+                """, "text/html");
+        }
+    }
+    catch (Exception)
+    {
+        return Results.Content($"""
+        <div class="alert alert-warning mt-2" id="warningAlert" role="alert">Please provide an RSS feed!</div>
+        """, "text/html");
+    }    
 });
 
-app.MapGet("/feed/urls", async () => {
-    // Display Title as well
+app.MapGet("/feed/urls", async (ClaimsPrincipal claims) => {
     connection.Open();
-    var feeds = await connection.QueryAsync<Feed>("SELECT * FROM Feeds WHERE UserId = 1");
+    var uid = claims.FindFirst("UserId");
+    if (uid == null)
+    {
+        return Results.Redirect("/");
+    }
+    var feeds = await connection.QueryAsync<Feed>("SELECT f.Id, f.UserId, f.Url FROM Feeds as f INNER JOIN Users as u ON f.UserId = u.Id WHERE u.Id = @Uid", new { Uid =  Convert.ToInt32(uid.Value) });
+    connection.Close();
+
     string html = "";
     foreach (var feed in feeds) {
-        html += $"""<li><button hx-delete="/feed/remove/{feed.UserId}/{feed.Id}" hx-target=".btn-group .dropdown-menu" hx-swap="innerHTML" class="dropdown-item">{feed.Url}</button></li>""";
+        html += $"""<li><button hx-delete="/feed/remove/{feed.UserId}/{feed.Id}" hx-target="#removeFormInput" hx-swap="beforeend" class="dropdown-item">{feed.Url}</button></li>""";
     }
     return Results.Content(html, "text/html");
 });
@@ -258,18 +437,116 @@ app.MapDelete("/feed/remove/{UserId}/{Id}", async (int UserId, string Id) => {
     connection.Open();
     var sqlCommand = "DELETE FROM Feeds WHERE Id = @Id AND UserId = @UserId";
     int rowsAffected = await connection.ExecuteAsync(sqlCommand, new { Id, UserId });
+    connection.Close();
 
-    var client = new HttpClient();
-    var response = await client.GetAsync("http://localhost:5075/feed/urls");
-    var content = await response.Content.ReadAsStringAsync();
+    return Results.Content($"""
+    <div class="alert alert-success mt-2" id="successAlert" role="alert">Feed Removed Successfully!</div>
+    """, "text/html");
+});
 
-    // var feeds = await connection.QueryAsync<Feed>("SELECT * FROM Feeds WHERE UserId = 1");
-    // string html = "";
-    // foreach (var feed in feeds) {
-    //     html += $"""<li><button hx-delete="/feed/remove/{feed.UserId}/{feed.Id}" hx-target=".btn-group .dropdown-menu" hx-swap="innerHTML" class="dropdown-item">{feed.Url}</button></li>""";
-    // }
+app.MapGet("/public-feed", async (ClaimsPrincipal claims) =>
+{
+    string html = $"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Feed Reader</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+            <link href="/index.css" rel="stylesheet">
+        </head>
+        <body class="bg-dark">
+            <header>
+                <nav class="navbar navbar-expand-lg navbar-light bg-light mb-2 sticky-top">
+                    <div class="container-fluid">
+                    <div class="navbar-brand d-inline">Feed Reader</div>
+                    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarScroll" aria-controls="navbarScroll" aria-expanded="false" aria-label="Toggle navigation">
+                        <span class="navbar-toggler-icon"></span>
+                    </button>
+                    <div class="collapse navbar-collapse" id="navbarScroll">
+                        <ul class="navbar-nav me-auto mb-2 mb-lg-0"></ul>
+                        <button hx-get="/render/sign-in" hx-target="main" class="btn btn-outline-dark mx-2" type="submit">Sign In</button>
+                        <button hx-get="/render/sign-up" hx-target="main" class="btn btn-outline-dark" type="submit">Sign Up</button>
+                    </div>
+                    </div>
+                </nav>
+            </header>
+            <main class="container">
+    """;
 
-    return Results.Content(content, "text/html");
+    var email = claims.FindFirst(ClaimTypes.Email);
+    if (email == null)
+    {
+        return Results.Redirect("/");
+    }
+
+    connection.Open();
+    var feedUrls = await connection.QueryAsync<Feed>("SELECT * FROM Feeds WHERE UserId = (SELECT Id FROM Users WHERE Email = @Email)", new { Email = email.Value });
+    connection.Close();
+
+    if (feedUrls == null || !feedUrls.Any())
+    {
+        return Results.NotFound("No feeds found for the specified user.");
+    }
+
+    Regex rtlRegex = new(@"[\u0590-\u08FF\u200F\u202A-\u202E\uFB1D-\uFB4F\uFE70-\uFEFF]");
+
+    var feedItems = new List<SyndicationItem>();
+    foreach (var feed in feedUrls) {
+        using var reader = XmlReader.Create(feed.Url);
+        var Feed = SyndicationFeed.Load(reader);
+
+        html += $"""
+            <div class="accordion-item">
+                <h2 class="accordion-header" id="heading{feed.Id}">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{feed.Id}" aria-expanded="false" aria-controls="collapse{feed.Id}">
+                    {feed.Url}
+                </button>
+                </h2>
+                <div id="collapse{feed.Id}" class="accordion-collapse collapse" aria-labelledby="heading{feed.Id}" data-bs-parent="#accordion">
+                <div class="accordion-body">
+            """;
+
+        foreach (var item in Feed.Items)
+        {
+            string direction = "";
+            if (rtlRegex.IsMatch(item.Summary.Text))
+            {
+                direction = "rtl"; // Text contains RTL characters
+            }
+            else
+            {
+                direction = "ltr"; // Text does not contain RTL characters
+            }
+
+            html += $"""  
+                    <div class="card">
+                        <div class="card-header text-muted">
+                            {item.PublishDate}
+                        </div>
+                        <div class="card-body">
+                            <p class="card-text" dir="{direction}">{item.Summary.Text}</p>
+                            <a href="{item.Links.FirstOrDefault()?.Uri}" class="btn btn-dark">Continue Reading</a>
+                        </div>
+                    </div>
+                    <br>
+                    """;
+        }
+
+        html += "</div></div></div>";
+    }
+
+    html += $"""
+        </main>
+            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM" crossorigin="anonymous"></script>
+            <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
+            <script src="index.js"></script>
+        </body>
+        </html>
+    """;
+
+    return Results.Content(html, "text/html");
 });
 
 app.Run();
@@ -278,6 +555,28 @@ public class Feed
 {
     public required string Id { get; set; }
     public required int UserId { get; set; }
-    // public string? Title { get; set; }
     public required string Url { get; set; }
 }
+
+public class User
+{
+    public string? Id { get; set; }
+    public required string Email { get; set; }
+    public required string PasswordHash { get; set; }
+}
+
+
+// connection.Execute(@"CREATE TABLE IF NOT EXISTS Users (
+//                         Id INTEGER PRIMARY KEY AUTOINCREMENT,
+//                         Email TEXT NOT NULL UNIQUE,
+//                         PasswordHash TEXT NOT NULL
+//                     );");
+
+// // connection.Execute(@"DROP TABLE Feeds");
+
+// connection.Execute(@"CREATE TABLE IF NOT EXISTS Feeds (
+//                         Id TEXT PRIMARY KEY,
+//                         UserId INTEGER NOT NULL,
+//                         Url TEXT NOT NULL,
+//                         FOREIGN KEY(UserId) REFERENCES Users(Id)
+//                     );");
