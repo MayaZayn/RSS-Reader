@@ -48,6 +48,10 @@ app.MapGet("/", (HttpContext context) => {
 
 app.MapGet("/landing-page", (HttpContext context) =>
 {
+    if (context.User.Identity!.IsAuthenticated)
+    {
+        return Results.Redirect("/home");
+    }
     string htmlContent = $"""
         <header>
             <nav class="navbar navbar-expand-lg navbar-light bg-light fixed-top">
@@ -434,7 +438,7 @@ app.MapPost("/feed/add", async (
     catch (Exception)
     {
         return Results.Content($"""
-        <div class="alert danger-warning mt-2" id="dangerAlert" role="alert">Please provide a valid RSS feed!</div>
+        <div class="alert alert-danger mt-2" id="dangerAlert" role="alert">Please provide a valid RSS feed!</div>
         """, "text/html");
     }    
 }).RequireAuthorization();

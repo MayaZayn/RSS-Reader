@@ -9,7 +9,7 @@ document.addEventListener('htmx:afterSwap', function (event) {
             setTimeout(function() {
                 document.getElementById('addForm').reset();
                 addFormInput.removeChild(addFormInput.lastChild);
-            }, 1000);
+            }, 3000);
         }
     } else if (event.detail.target.id === 'removeFormInput') {
         setTimeout(function() {
@@ -25,7 +25,7 @@ document.addEventListener('htmx:afterSwap', function (event) {
         } else {
             setTimeout(function() {
                 htmx.ajax('GET', '/home', { target: '#mainContent', swap: 'innerHTML' });
-            }, 1000);
+            }, 3000);
         }
     } else if (event.detail.elt.id === 'signUpForm') {
         let signUpForm = document.getElementById('signUpForm');
@@ -36,7 +36,7 @@ document.addEventListener('htmx:afterSwap', function (event) {
         } else {
             setTimeout(function() {
                 htmx.ajax('GET', '/render/sign-in', { target: '#mainContent', swap: 'innerHTML' });
-            }, 1000);
+            }, 3000);
         }
     }
 });
