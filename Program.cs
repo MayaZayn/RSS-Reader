@@ -335,6 +335,9 @@ app.MapGet("/feeds", async (ClaimsPrincipal claims) =>
             """;
     }
     
+    if (html == "" )
+        html = "<h2 class=\"text-muted text-center pb-3\">No Feeds</h2>";
+
     return Results.Content(html, "text/html");
 }).RequireAuthorization();
 
